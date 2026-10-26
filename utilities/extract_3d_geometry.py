@@ -190,46 +190,43 @@ def parse_gtf_isoforms(gtf_path: pathlib.Path) -> dict:
     return isoforms_by_gene
 
 
-def compute_exon_residue_range(exon_idx: int, exons_sorted: list):
-    """Return the (1-based) protein residue range covered by a CDS exon.
+def compute_exon_residue_range(exon_idx: int, exons_sorted: list,
+                               protein_length: int | None = None):
+    """Return inclusive 1-based residues contributed by a coding exon.
 
-    Args:
-        exon_idx: 0-based position of the exon in *exons_sorted*.
-        exons_sorted: Exon dicts sorted ascending by exon_start.
-
-    Returns:
-        ``(res_start, res_end)`` (both inclusive, 1-based), or ``None`` if the
-        exon has no CDS overlap.
+    GTF coordinates are inclusive. A codon crossing an exon junction contributes
+    its residue to both exon highlights. Optional protein_length clips stop codon.
     """
+    if not (0 <= exon_idx < len(exons_sorted)):
+        raise IndexError("exon_idx is outside exons_sorted")
     target = exons_sorted[exon_idx]
-    if (target.get("cds_start") is None
-            or target.get("cds_end") is None
-            or target["cds_end"] <= target["cds_start"]):
+    cs, ce = target.get("cds_start"), target.get("cds_end")
+    if cs is None or ce is None or ce < cs:
         return None
-
     strand = target.get("strand", "+")
-
-    # On the minus strand the transcript is read in reverse genomic order.
+    if strand not in ("+", "-"):
+        raise ValueError(f"Unexpected exon strand: {strand!r}")
+    indices = list(range(len(exons_sorted)))
     if strand == "-":
-        ordered          = list(reversed(exons_sorted))
-        target_order_idx = len(exons_sorted) - 1 - exon_idx
-    else:
-        ordered          = exons_sorted
-        target_order_idx = exon_idx
-
+        indices.reverse()
     cumulative_bp = 0
-    for i, exon in enumerate(ordered):
-        if i == target_order_idx:
+    for idx in indices:
+        exon = exons_sorted[idx]
+        s, e = exon.get("cds_start"), exon.get("cds_end")
+        if idx == exon_idx:
             break
-        cs = exon.get("cds_start")
-        ce = exon.get("cds_end")
-        if cs is not None and ce is not None and ce > cs:
-            cumulative_bp += ce - cs
-
-    target_cds_bp = target["cds_end"] - target["cds_start"]
-    res_start     = cumulative_bp // 3 + 1
-    res_end       = (cumulative_bp + target_cds_bp - 1) // 3 + 1
-    return (res_start, res_end)
+        if s is not None and e is not None and e >= s:
+            cumulative_bp += e - s + 1
+    exon_bp = ce - cs + 1
+    first = cumulative_bp // 3 + 1
+    last = (cumulative_bp + exon_bp - 1) // 3 + 1
+    if protein_length is not None:
+        if protein_length < 0:
+            raise ValueError("protein_length must be nonnegative")
+        if first > protein_length:
+            return None
+        last = min(last, protein_length)
+    return first, last
 
 
 # ───────────────────────────── CIF helpers ─────────────────────────────────

@@ -11,3 +11,15 @@ isoform_dashboard_env/
 isoform_dashboard/assets/pipeline_runner.py
 isoform_dashboard/assets/tool_run.log
 test_sparse_save.py
+
+# Local development and patch files
+*.bak
+apply_exon_viewer_fix.py
+fix_exsquared_exon_mapping.py
+fix_exsquared_viewer_utf8.py
+ExSquared_PR1_Exon_Mapping_Fix/
+
+# Python temporary files
+__pycache__/
+.pytest_cache/
+*.pyc

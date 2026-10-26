@@ -1,0 +1,8 @@
+# Cross-platform text normalization for local Windows development and Linux HPC.
+*.py text eol=lf
+*.sh text eol=lf
+*.smk text eol=lf
+*.sbatch text eol=lf
+*.md text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf

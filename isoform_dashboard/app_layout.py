@@ -35,6 +35,8 @@ from .visualizations import (
 )
 from .coexpression_network import create_coexpression_widget, generate_network_elements
 from .config import Colors, Dimensions
+from urllib.parse import quote
+from .viewer_selection import select_viewer_file, lookup_viewer_variant
 
 # Residue-range helper (pure function, no heavy deps)
 import sys as _sys
@@ -3913,7 +3915,7 @@ print("\\n=== Drive mapped successfully! ===")
     def _load_patched_html(path: str) -> str:
         """Return patched HTML content, reading from disk only on first access."""
         if path not in _html_content_cache:
-            content = open(path, "r").read()
+            content = open(path, "r", encoding="utf-8").read()
             # Remove dark legend baked in by extract_3d_geometry.py
             content = _re.sub(
                 r'<div[^>]*background:#1a1a2e[^>]*>.*?pLDDT colour key.*?</div>',
@@ -3924,6 +3926,22 @@ print("\\n=== Drive mapped successfully! ===")
             content = content.replace("</head>", _STYLE_PATCH + _JS_PATCH + "</head>", 1)
             _html_content_cache[path] = content
         return _html_content_cache[path]
+
+    # Serve only already-indexed structure HTML; changing iframe.src forces
+    # the browser to reload the requested model when an exon is selected.
+    @app.server.route("/_exsquared_viewer/<viewer_key>/<variant>", methods=["GET"])
+    def serve_exsquared_viewer(viewer_key, variant):
+        from flask import Response, abort
+        geo_entry = state["af_geometry_mapping"].get(viewer_key)
+        if not geo_entry:
+            abort(404)
+        requested_path = lookup_viewer_variant(geo_entry, variant)
+        if not requested_path:
+            abort(404)
+        response = Response(_load_patched_html(requested_path), mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.callback(
         Output("glb-viewer-container", "children"),
@@ -3969,21 +3987,20 @@ print("\\n=== Drive mapped successfully! ===")
         else:
             viewer_label = f"3D – {selected_transcript}"
 
-        # Override with exon-specific HTML if an exon is selected for this transcript
-        if (selected_exon is not None and
-                selected_exon.get("transcript_id") == selected_transcript):
-            exon_idx = selected_exon.get("exon_idx")
-            exon_htmls = geo.get("exon_htmls", [])
-            if (exon_idx is not None and
-                    exon_idx < len(exon_htmls) and
-                    exon_htmls[exon_idx] and
-                    os.path.isfile(exon_htmls[exon_idx])):
-                html_path = exon_htmls[exon_idx]
-                viewer_label = f"{viewer_label} · Exon {exon_idx + 1}"
+        # The exon store and geometry must agree on the exact transcript ID.
+        html_path, selected_idx = select_viewer_file(geo, selected_transcript, selected_exon)
+        variant = f"exon{selected_idx}" if selected_idx is not None else "full"
+        if selected_idx is not None:
+            viewer_label = f"{viewer_label} · Exon {selected_idx + 1}"
+        elif selected_exon and selected_exon.get("transcript_id") == selected_transcript:
+            log.warning("3D viewer falling back to full model: exon HTML not found "
+                        "for transcript=%s exon=%s", selected_transcript, selected_exon.get("exon_idx"))
 
         # ── HTML viewer ─────────────────────────────────────────
         if html_path and os.path.isfile(html_path):
-            html_content = _load_patched_html(html_path)
+            viewer_key = selected_transcript.replace(".", "").lower()
+            viewer_url = f"/_exsquared_viewer/{quote(viewer_key, safe='')}/{variant}"
+            log.info("3D viewer: transcript=%s variant=%s src=%s", selected_transcript, variant, viewer_url)
 
             children = [
                 html.P(
@@ -3993,7 +4010,7 @@ print("\\n=== Drive mapped successfully! ===")
             ]
             children += [
                 html.Iframe(
-                    srcDoc=html_content,
+                    src=viewer_url,
                     style={"width": "100%", "height": "460px",
                            "border": "none", "display": "block"},
                 ),
@@ -4122,7 +4139,7 @@ print("\\n=== Drive mapped successfully! ===")
             if exon_idx is not None:
                 exons_sorted = state['transcript_to_exons'].get(selected_transcript)
                 if exons_sorted is not None and exon_idx < len(exons_sorted):
-                    res_range = compute_exon_residue_range(exon_idx, exons_sorted)
+                    res_range = compute_exon_residue_range(exon_idx, exons_sorted, protein_length=len(sequence))
                     if res_range is not None:
                         hi_start, hi_end = res_range
                         exon_label = f"Exon {exon_idx + 1}"
